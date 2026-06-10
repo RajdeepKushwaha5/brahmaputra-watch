@@ -1,0 +1,7 @@
+# local working notes and drafts
+article/
+
+# secrets and local env
+.env
+*.local
+docker-compose.override.yml
