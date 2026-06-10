@@ -1,0 +1,101 @@
+# ── Flow 2/5: monitor_river ──────────────────────────────────────────
+# The decision-maker. Every 6 hours:
+#   1. Fetch the 7-day ensemble forecast for the river point.
+#   2. Take the MAX of the next 3 days of river_discharge_max — the
+#      ensemble maximum, not the median: for a warning system a false
+#      positive costs an apology, a false negative costs much more.
+#   3. Classify against the calibrated KV thresholds → NORMAL/WATCH/DANGER.
+#   4. Alert only on STATE TRANSITIONS (KV-store memory), never on levels.
+#      De-escalations alert too — "water receding" is information.
+# All severity decisions happen HERE, in deterministic YAML. The AI agent
+# downstream only translates; it never judges.
+id: monitor_river
+namespace: assam.floodwatch
+
+labels:
+  project: brahmaputra-watch
+  version: v2
+
+concurrency:
+  behavior: CANCEL
+  limit: 1
+
+inputs:
+  - id: latitude
+    type: FLOAT
+    defaults: 26.02
+  - id: longitude
+    type: FLOAT
+    defaults: 89.98
+  - id: station
+    type: STRING
+    defaults: "Brahmaputra at Dhubri"
+
+tasks:
+  - id: fetch_forecast
+    type: io.kestra.plugin.core.http.Request
+    uri: "https://flood-api.open-meteo.com/v1/flood?latitude={{ inputs.latitude }}&longitude={{ inputs.longitude }}&daily=river_discharge_max&forecast_days=7"
+    retry:
+      type: constant
+      interval: PT2M
+      maxAttempt: 3
+
+  - id: peak
+    type: io.kestra.plugin.core.debug.Return
+    format: "{{ outputs.fetch_forecast.body | jq('.daily.river_discharge_max[0:3] | max') | first }}"
+
+  - id: severity
+    type: io.kestra.plugin.core.debug.Return
+    # kv() returns a typed NUMBER (Double) directly; only the Return task's
+    # string output needs the `number` filter.
+    format: "{{ (outputs.peak.value | number) >= kv('DANGER_LEVEL') ? 'DANGER' : ((outputs.peak.value | number) >= kv('WATCH_LEVEL') ? 'WATCH' : 'NORMAL') }}"
+
+  - id: last_state
+    type: io.kestra.plugin.core.kv.Get
+    key: LAST_SEVERITY
+    errorOnMissing: false
+
+  - id: on_transition
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{ (outputs.last_state.value ?? 'NORMAL') != outputs.severity.value }}"
+    then:
+      - id: send_alert
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: assam.floodwatch
+        flowId: send_alert
+        wait: true
+        inputs:
+          severity: "{{ outputs.severity.value }}"
+          previous_severity: "{{ outputs.last_state.value ?? 'NORMAL' }}"
+          peak_m3s: "{{ outputs.peak.value }}"
+          watch_level: "{{ kv('WATCH_LEVEL') }}"
+          danger_level: "{{ kv('DANGER_LEVEL') }}"
+          station: "{{ inputs.station }}"
+
+      - id: if_danger
+        type: io.kestra.plugin.core.flow.If
+        condition: "{{ outputs.severity.value == 'DANGER' }}"
+        then:
+          - id: escalate
+            type: io.kestra.plugin.core.flow.Subflow
+            namespace: assam.floodwatch
+            flowId: escalate_severe
+            wait: true
+            inputs:
+              peak_m3s: "{{ outputs.peak.value }}"
+              danger_level: "{{ kv('DANGER_LEVEL') }}"
+              station: "{{ inputs.station }}"
+
+      - id: remember_state
+        type: io.kestra.plugin.core.kv.Set
+        key: LAST_SEVERITY
+        value: "{{ outputs.severity.value }}"
+    else:
+      - id: log_steady
+        type: io.kestra.plugin.core.log.Log
+        message: "No transition: severity stays {{ outputs.severity.value }} (3-day peak {{ outputs.peak.value }} m³/s)."
+
+triggers:
+  - id: every_6_hours
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 */6 * * *"
