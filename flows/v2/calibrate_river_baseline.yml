@@ -1,7 +1,8 @@
 # ── Flow 1/5: calibrate_river_baseline ───────────────────────────────
-# Runs weekly. Pulls 40+ years of GloFAS v4 reanalysis for one river
-# point, computes monsoon-season (Jun–Sep) discharge percentiles, and
-# stores them in the KV store:
+# Runs weekly. Requests the full GloFAS v4 reanalysis (nominally from
+# 1984; usable data for this grid cell starts in 1997), computes
+# monsoon-season (Jun–Sep) discharge percentiles from the non-null days,
+# and stores them in the KV store:
 #   WATCH_LEVEL  = p90 of monsoon-season daily discharge
 #   DANGER_LEVEL = p98 of monsoon-season daily discharge
 # Rivers don't have one universal danger number; they have a history.
@@ -61,7 +62,10 @@ tasks:
       watch = percentile(monsoon, 90)
       danger = percentile(monsoon, 98)
 
-      print(f"{len(monsoon)} monsoon-season days, {dates[0]} → {dates[-1]}")
+      # Report the span of usable data, not the span requested: the API
+      # returns nulls for years it does not cover at this grid cell.
+      valid = [d for d, v in zip(dates, discharge) if v is not None]
+      print(f"{len(monsoon)} monsoon-season days, data {valid[0]} → {valid[-1]}")
       print(f"WATCH  (p90): {watch:,.0f} m³/s")
       print(f"DANGER (p98): {danger:,.0f} m³/s")
 

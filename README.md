@@ -17,7 +17,7 @@ Five flows (plus the naive v1, kept for the write-up):
 
 | Flow | Trigger | Job |
 |---|---|---|
-| `calibrate_river_baseline` | Weekly (Mon 03:00) | 40 years of GloFAS reanalysis → monsoon-season p90/p98 → KV store |
+| `calibrate_river_baseline` | Weekly (Mon 03:00) | Full GloFAS reanalysis → monsoon-season p90/p98 → KV store |
 | `monitor_river` | Every 6 h | Fetch 7-day ensemble forecast, classify NORMAL/WATCH/DANGER, alert **only on transitions** |
 | `send_alert` | Subflow | Gemini rewrites the bulletin in Assamese + English; `errors:` branch sends a plain numeric fallback |
 | `escalate_severe` | Subflow (DANGER only) | 15-min human review window via `Pause`; **fails open** to the district group on timeout |
@@ -26,7 +26,10 @@ Five flows (plus the naive v1, kept for the write-up):
 Design rules the flows encode:
 
 - **Calibrate, don't guess.** Danger thresholds come from the river's own
-  1984–present monsoon distribution, not a number borrowed from Wikipedia.
+  own monsoon-season history, not a number borrowed from Wikipedia. (The
+  request reaches back to 1984; usable data for the default grid cell
+  starts in 1997. The script filters nulls, so thresholds always reflect
+  the data that actually exists.)
 - **Alert on transitions, not levels.** KV-store memory; severity changes fire
   messages, steady states don't. De-escalations alert too ("water receding").
 - **Ensemble max, not median.** For warnings, a false negative costs more than
@@ -39,7 +42,7 @@ Design rules the flows encode:
 ## Data sources
 
 - [Open-Meteo Flood API](https://open-meteo.com/en/docs/flood-api) — GloFAS v4
-  river discharge, ~5 km grid, free, **no API key**. Reanalysis from 1984,
+  river discharge, ~5 km grid, free, **no API key**. Reanalysis nominally from 1984 (coverage varies by cell),
   forecasts with ensemble aggregates (`river_discharge_max` etc.).
   - Forecast: `https://flood-api.open-meteo.com/v1/flood?latitude=26.02&longitude=89.98&daily=river_discharge_max&forecast_days=7`
   - History: same endpoint with `daily=river_discharge&start_date=1984-01-01&end_date=<today>`

@@ -55,7 +55,7 @@ tasks:
     payload: |
       🔴 FLOOD DANGER — {{ inputs.station }}
       Forecast peak discharge: {{ inputs.peak_m3s }} m³/s, above the
-      98th percentile of 40 years of monsoon-season history.
+      98th percentile of three decades of monsoon-season history.
       Reviewed and confirmed by a human operator.
       Follow ASDMA and district administration instructions.
 
@@ -67,7 +67,7 @@ errors:
     payload: |
       🔴 FLOOD DANGER — {{ inputs.station }}
       Forecast peak discharge: {{ inputs.peak_m3s }} m³/s, above the
-      98th percentile of 40 years of monsoon-season history.
+      98th percentile of three decades of monsoon-season history.
       (Automatic escalation — sent without human review after a
       15-minute window. Treat as machine-generated.)
       Follow ASDMA and district administration instructions.
