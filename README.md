@@ -1,7 +1,7 @@
 # Brahmaputra Watch
 
 The last mile for a flood forecast that already exists.
-
+D:\Kestra\brahmaputra-watch\article\hero-discharge.png
 India's Central Water Commission publishes flood forecasts with up to 24 hours
 of lead time at [ffs.india-water.gov.in](https://ffs.india-water.gov.in/) — on a
 dashboard, in English, in cumecs. Assam's floods affect millions of people every
