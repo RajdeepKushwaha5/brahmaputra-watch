@@ -1,0 +1,41 @@
+# ── Flow 5/5: watchdog ───────────────────────────────────────────────
+# Who watches the watcher. A Flow trigger listens for any FAILED
+# execution in the assam.floodwatch namespace and tells the operator.
+# A warning system's worst failure mode is silent death: if monitor_river
+# stops running, no alert fires and nobody notices until the water does.
+#
+# Note the namespace: the watchdog lives in assam.ops, OUTSIDE the
+# namespace it watches. If it listened to its own namespace, a failure
+# in the watchdog itself would re-trigger the watchdog — recursion is a
+# bad failure mode for a safety system.
+id: watchdog
+namespace: assam.ops
+
+labels:
+  project: brahmaputra-watch
+  version: v2
+
+variables:
+  admin_chat: "-1009876543210"
+
+tasks:
+  - id: alert_operator
+    type: io.kestra.plugin.notifications.telegram.TelegramSend
+    token: "{{ secret('TELEGRAM_BOT_TOKEN') }}"
+    channel: "{{ vars.admin_chat }}"
+    payload: |
+      🛠 floodwatch flow FAILED
+      Flow: {{ trigger.namespace }}/{{ trigger.flowId }}
+      Execution: {{ trigger.executionId }}
+      The warning pipeline may be silent. Investigate now.
+
+triggers:
+  - id: on_floodwatch_failure
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionStatus
+        in:
+          - FAILED
+      - type: io.kestra.plugin.core.condition.ExecutionNamespace
+        namespace: assam.floodwatch
+        comparison: PREFIX
