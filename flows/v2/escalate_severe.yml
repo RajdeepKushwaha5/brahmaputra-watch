@@ -1,0 +1,73 @@
+# ── Flow 4/5: escalate_severe ────────────────────────────────────────
+# Human-in-the-loop with a fail-open default. When severity hits DANGER,
+# the family group is already alerted (send_alert ran first — life-safety
+# messages never wait on a human). This flow handles the WIDER blast
+# radius: a district/community group where a false alarm erodes trust.
+#
+# A Pause task waits up to 15 minutes for a human to review and resume.
+# If nobody resumes in time, the Pause task FAILS on timeout — which
+# routes into the errors branch, which sends the escalation anyway,
+# labelled as unreviewed. For most approval gates you fail closed
+# (no human, no action). For a flood warning you fail OPEN: the cost of
+# silence is higher than the cost of an unreviewed message.
+id: escalate_severe
+namespace: assam.floodwatch
+
+labels:
+  project: brahmaputra-watch
+  version: v2
+
+inputs:
+  - id: peak_m3s
+    type: FLOAT
+  - id: danger_level
+    type: FLOAT
+  - id: station
+    type: STRING
+    defaults: "Brahmaputra at Dhubri"
+
+variables:
+  admin_chat: "-1009876543210"    # you / whoever reviews escalations
+  district_chat: "-1005556667770" # the wider community group
+
+tasks:
+  - id: notify_reviewer
+    type: io.kestra.plugin.notifications.telegram.TelegramSend
+    token: "{{ secret('TELEGRAM_BOT_TOKEN') }}"
+    channel: "{{ vars.admin_chat }}"
+    payload: |
+      🔴 DANGER forecast for {{ inputs.station }}: {{ inputs.peak_m3s }} m³/s
+      (calibrated danger level: {{ inputs.danger_level }} m³/s).
+
+      Review and RESUME execution {{ execution.id }} in Kestra within
+      15 minutes to approve the district-wide alert.
+      If you do nothing, it sends automatically (fail-open).
+
+  - id: approval_window
+    type: io.kestra.plugin.core.flow.Pause
+    timeout: PT15M
+    description: "Human review window for district-wide escalation"
+
+  - id: send_district_reviewed
+    type: io.kestra.plugin.notifications.telegram.TelegramSend
+    token: "{{ secret('TELEGRAM_BOT_TOKEN') }}"
+    channel: "{{ vars.district_chat }}"
+    payload: |
+      🔴 FLOOD DANGER — {{ inputs.station }}
+      Forecast peak discharge: {{ inputs.peak_m3s }} m³/s, above the
+      98th percentile of 40 years of monsoon-season history.
+      Reviewed and confirmed by a human operator.
+      Follow ASDMA and district administration instructions.
+
+errors:
+  - id: send_district_unreviewed
+    type: io.kestra.plugin.notifications.telegram.TelegramSend
+    token: "{{ secret('TELEGRAM_BOT_TOKEN') }}"
+    channel: "{{ vars.district_chat }}"
+    payload: |
+      🔴 FLOOD DANGER — {{ inputs.station }}
+      Forecast peak discharge: {{ inputs.peak_m3s }} m³/s, above the
+      98th percentile of 40 years of monsoon-season history.
+      (Automatic escalation — sent without human review after a
+      15-minute window. Treat as machine-generated.)
+      Follow ASDMA and district administration instructions.
