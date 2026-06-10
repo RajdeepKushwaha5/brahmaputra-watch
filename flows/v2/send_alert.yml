@@ -1,0 +1,84 @@
+# ── Flow 3/5: send_alert ─────────────────────────────────────────────
+# The translator. Receives a decided severity + the numbers behind it,
+# asks Gemini to rewrite them as a short bilingual (Assamese + English)
+# message a non-technical family member can act on — and falls back to
+# a plain numeric template via the flow-level errors branch if the AI
+# call fails. A warning system that goes silent when the LLM is down
+# would be the deadliest bug in this project, so the failure path IS
+# the design, not an afterthought.
+id: send_alert
+namespace: assam.floodwatch
+
+labels:
+  project: brahmaputra-watch
+  version: v2
+
+inputs:
+  - id: severity
+    type: SELECT
+    values: [NORMAL, WATCH, DANGER]
+  - id: previous_severity
+    type: STRING
+    defaults: NORMAL
+  - id: peak_m3s
+    type: FLOAT
+  - id: watch_level
+    type: FLOAT
+  - id: danger_level
+    type: FLOAT
+  - id: station
+    type: STRING
+    defaults: "Brahmaputra at Dhubri"
+
+variables:
+  family_chat: "-1001234567890" # replace with your Telegram group chat id
+
+tasks:
+  - id: ai_compose
+    type: io.kestra.plugin.ai.agent.AIAgent
+    provider:
+      type: io.kestra.plugin.ai.provider.GoogleGemini
+      modelName: gemini-2.5-flash
+      apiKey: "{{ secret('GEMINI_API_KEY') }}"
+    systemMessage: |
+      You translate river flood bulletins for families in Assam, India.
+      Audience: non-technical adults reading on a phone.
+
+      Output format, nothing else:
+      1. Two or three short sentences in Assamese.
+      2. The same content in simple English.
+      3. Exactly two concrete actions appropriate to the severity level.
+
+      Hard rules:
+      - The severity level given to you is FINAL. Never upgrade, downgrade,
+        soften, or second-guess it. You translate; the orchestrator judges.
+      - No greetings, no sign-offs, no emojis except one leading symbol:
+        🔴 for DANGER, 🟠 for WATCH, 🟢 for return to NORMAL.
+      - Maximum 700 characters total.
+      - If the severity moved DOWN (de-escalation), say clearly that water
+        is expected to recede but normal caution should continue.
+    prompt: |
+      River: {{ inputs.station }}
+      Severity: {{ inputs.severity }} (previous: {{ inputs.previous_severity }})
+      Forecast peak discharge over next 3 days: {{ inputs.peak_m3s }} m³/s
+      Calibrated WATCH level (p90 of monsoon history): {{ inputs.watch_level }} m³/s
+      Calibrated DANGER level (p98 of monsoon history): {{ inputs.danger_level }} m³/s
+      Forecast source: GloFAS ensemble maximum, ~5 km grid.
+
+  - id: send
+    type: io.kestra.plugin.notifications.telegram.TelegramSend
+    token: "{{ secret('TELEGRAM_BOT_TOKEN') }}"
+    channel: "{{ vars.family_chat }}"
+    payload: "{{ outputs.ai_compose.textOutput }}"
+
+errors:
+  - id: send_plain_fallback
+    type: io.kestra.plugin.notifications.telegram.TelegramSend
+    token: "{{ secret('TELEGRAM_BOT_TOKEN') }}"
+    channel: "{{ vars.family_chat }}"
+    payload: |
+      {{ inputs.severity == 'DANGER' ? '🔴' : (inputs.severity == 'WATCH' ? '🟠' : '🟢') }} RIVER ALERT — {{ inputs.station }}
+      Level: {{ inputs.severity }} (was {{ inputs.previous_severity }})
+      Forecast peak (3 days): {{ inputs.peak_m3s }} m³/s
+      Watch level: {{ inputs.watch_level }} m³/s | Danger level: {{ inputs.danger_level }} m³/s
+      (Automatic message — translation service unavailable.)
