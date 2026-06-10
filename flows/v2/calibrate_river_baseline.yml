@@ -1,0 +1,93 @@
+# ── Flow 1/5: calibrate_river_baseline ───────────────────────────────
+# Runs weekly. Pulls 40+ years of GloFAS v4 reanalysis for one river
+# point, computes monsoon-season (Jun–Sep) discharge percentiles, and
+# stores them in the KV store:
+#   WATCH_LEVEL  = p90 of monsoon-season daily discharge
+#   DANGER_LEVEL = p98 of monsoon-season daily discharge
+# Rivers don't have one universal danger number; they have a history.
+# The monitor flow compares forecasts against these calibrated levels.
+id: calibrate_river_baseline
+namespace: assam.floodwatch
+
+labels:
+  project: brahmaputra-watch
+  version: v2
+
+inputs:
+  - id: latitude
+    type: FLOAT
+    defaults: 26.02
+    description: "Latitude of the river point to calibrate (default: Brahmaputra at Dhubri)"
+  - id: longitude
+    type: FLOAT
+    defaults: 89.98
+    description: "Longitude of the river point to calibrate"
+
+tasks:
+  - id: fetch_history
+    type: io.kestra.plugin.core.http.Request
+    uri: "https://flood-api.open-meteo.com/v1/flood?latitude={{ inputs.latitude }}&longitude={{ inputs.longitude }}&daily=river_discharge&start_date=1984-01-01&end_date={{ now() | date('yyyy-MM-dd') }}"
+    retry:
+      type: constant
+      interval: PT2M
+      maxAttempt: 3
+
+  - id: compute_thresholds
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: ghcr.io/kestra-io/pydata:latest
+    inputFiles:
+      history.json: "{{ outputs.fetch_history.body }}"
+    script: |
+      import json
+      from kestra import Kestra
+
+      with open("history.json") as f:
+          data = json.load(f)
+
+      dates = data["daily"]["time"]
+      discharge = data["daily"]["river_discharge"]
+
+      # Monsoon-season days only (June–September): the distribution we
+      # alert against must be the distribution we alert during.
+      monsoon = sorted(
+          v for d, v in zip(dates, discharge)
+          if v is not None and int(d[5:7]) in (6, 7, 8, 9)
+      )
+
+      def percentile(sorted_vals, p):
+          idx = round(p / 100 * (len(sorted_vals) - 1))
+          return sorted_vals[idx]
+
+      watch = percentile(monsoon, 90)
+      danger = percentile(monsoon, 98)
+
+      print(f"{len(monsoon)} monsoon-season days, {dates[0]} → {dates[-1]}")
+      print(f"WATCH  (p90): {watch:,.0f} m³/s")
+      print(f"DANGER (p98): {danger:,.0f} m³/s")
+
+      Kestra.outputs({
+          "watch_level": watch,
+          "danger_level": danger,
+          "sample_size": len(monsoon),
+      })
+
+  - id: save_watch_level
+    type: io.kestra.plugin.core.kv.Set
+    key: WATCH_LEVEL
+    value: "{{ outputs.compute_thresholds.vars.watch_level }}"
+
+  - id: save_danger_level
+    type: io.kestra.plugin.core.kv.Set
+    key: DANGER_LEVEL
+    value: "{{ outputs.compute_thresholds.vars.danger_level }}"
+
+  - id: log_result
+    type: io.kestra.plugin.core.log.Log
+    message: |
+      Baseline recalibrated from {{ outputs.compute_thresholds.vars.sample_size }} monsoon-season days:
+      WATCH={{ outputs.compute_thresholds.vars.watch_level }} m³/s, DANGER={{ outputs.compute_thresholds.vars.danger_level }} m³/s
+
+triggers:
+  - id: weekly
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 3 * * 1" # Mondays 03:00
