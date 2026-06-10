@@ -1,0 +1,44 @@
+# ── v1: the version that cried wolf ──────────────────────────────────
+# Kept as a reference baseline. Three deliberate-in-hindsight mistakes:
+#   1. Threshold is 20,000 m³/s — the Brahmaputra's ANNUAL MEAN discharge.
+#      During monsoon the river exceeds its annual mean almost every day.
+#   2. Polls every 30 minutes — but GloFAS forecasts update once per day.
+#   3. Alerts on the LEVEL, not on a CHANGE of state — no memory, so the
+#      same flood condition re-alerts on every poll.
+id: river_alert_naive
+namespace: assam.floodwatch.v1
+
+# Kept disabled: it alerts on levels instead of transitions and will spam
+# any chat it is pointed at. Enable only to reproduce the failure mode.
+disabled: true
+
+labels:
+  project: brahmaputra-watch
+  version: v1
+
+tasks:
+  - id: fetch_forecast
+    type: io.kestra.plugin.core.http.Request
+    uri: "https://flood-api.open-meteo.com/v1/flood?latitude=26.02&longitude=89.98&daily=river_discharge&forecast_days=3"
+
+  - id: check_threshold
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{ (outputs.fetch_forecast.body | jq('.daily.river_discharge[0]') | first) > 20000 }}"
+    then:
+      - id: send_alert
+        type: io.kestra.plugin.notifications.telegram.TelegramSend
+        token: "{{ secret('TELEGRAM_BOT_TOKEN') }}"
+        channel: "{{ vars.family_chat }}"
+        payload: |
+          ⚠️ FLOOD WARNING
+          Brahmaputra at Dhubri forecast discharge:
+          {{ outputs.fetch_forecast.body | jq('.daily.river_discharge[0]') | first }} m³/s
+          (threshold: 20000 m³/s)
+
+variables:
+  family_chat: "-1001234567890" # replace with your Telegram group chat id
+
+triggers:
+  - id: every_30_min
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "*/30 * * * *"
